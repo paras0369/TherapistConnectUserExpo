@@ -1,26 +1,39 @@
-// Updated src/services/firebase.js - Fix deprecation warnings and use new API
-import messaging from "@react-native-firebase/messaging";
+// Updated src/services/firebase.js - Using new modular API
+import {
+  getMessaging,
+  requestPermission,
+  setBackgroundMessageHandler,
+  onMessage,
+  getToken,
+  onNotificationOpenedApp,
+  getInitialNotification,
+  subscribeToTopic,
+  unsubscribeFromTopic,
+} from "@react-native-firebase/messaging";
 import { getApp } from "@react-native-firebase/app";
 import { Platform } from "react-native";
 
 export class FirebaseService {
   static async initializeFirebase() {
     try {
-      // Use new API - getApp() instead of deprecated method
+      // Use modular API - getApp()
       const app = getApp();
       console.log("Firebase app initialized:", app.name);
 
-      // Request permission for notifications using new API
-      const authStatus = await messaging().requestPermission();
+      // Get messaging instance
+      const messaging = getMessaging(app);
+
+      // Request permission for notifications using modular API
+      const authStatus = await requestPermission(messaging);
       const enabled =
-        authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
-        authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+        authStatus === 1 || // AUTHORIZED
+        authStatus === 2; // PROVISIONAL
 
       if (enabled) {
         console.log("Authorization status:", authStatus);
 
-        // Get FCM token using new API
-        const fcmToken = await messaging().getToken();
+        // Get FCM token using modular API
+        const fcmToken = await getToken(messaging);
         console.log("FCM Token:", fcmToken);
         return fcmToken;
       }
@@ -32,7 +45,9 @@ export class FirebaseService {
 
   static async getFCMToken() {
     try {
-      const fcmToken = await messaging().getToken();
+      const app = getApp();
+      const messaging = getMessaging(app);
+      const fcmToken = await getToken(messaging);
       return fcmToken;
     } catch (error) {
       console.error("Error getting FCM token:", error);
@@ -41,8 +56,11 @@ export class FirebaseService {
   }
 
   static setupNotificationListeners(onCallNotification) {
-    // Background message handler using new API
-    messaging().setBackgroundMessageHandler(async (remoteMessage) => {
+    const app = getApp();
+    const messaging = getMessaging(app);
+
+    // Background message handler using modular API
+    setBackgroundMessageHandler(messaging, async (remoteMessage) => {
       console.log("Message handled in the background!", remoteMessage);
       if (remoteMessage.data?.type === "incoming_call") {
         onCallNotification(remoteMessage.data);
@@ -50,7 +68,7 @@ export class FirebaseService {
     });
 
     // Foreground message handler
-    const unsubscribe = messaging().onMessage(async (remoteMessage) => {
+    const unsubscribe = onMessage(messaging, async (remoteMessage) => {
       console.log("A new FCM message arrived!", remoteMessage);
       if (remoteMessage.data?.type === "incoming_call") {
         onCallNotification(remoteMessage.data);
@@ -58,7 +76,7 @@ export class FirebaseService {
     });
 
     // Handle notification tap when app is in background
-    messaging().onNotificationOpenedApp((remoteMessage) => {
+    onNotificationOpenedApp(messaging, (remoteMessage) => {
       console.log(
         "Notification caused app to open from background state:",
         remoteMessage
@@ -69,26 +87,26 @@ export class FirebaseService {
     });
 
     // Handle notification tap when app is completely closed
-    messaging()
-      .getInitialNotification()
-      .then((remoteMessage) => {
-        if (remoteMessage) {
-          console.log(
-            "Notification caused app to open from quit state:",
-            remoteMessage
-          );
-          if (remoteMessage.data?.type === "incoming_call") {
-            onCallNotification(remoteMessage.data);
-          }
+    getInitialNotification(messaging).then((remoteMessage) => {
+      if (remoteMessage) {
+        console.log(
+          "Notification caused app to open from quit state:",
+          remoteMessage
+        );
+        if (remoteMessage.data?.type === "incoming_call") {
+          onCallNotification(remoteMessage.data);
         }
-      });
+      }
+    });
 
     return unsubscribe;
   }
 
   static async subscribeToTopic(topic) {
     try {
-      await messaging().subscribeToTopic(topic);
+      const app = getApp();
+      const messaging = getMessaging(app);
+      await subscribeToTopic(messaging, topic);
       console.log(`Subscribed to topic: ${topic}`);
     } catch (error) {
       console.error("Error subscribing to topic:", error);
@@ -97,7 +115,9 @@ export class FirebaseService {
 
   static async unsubscribeFromTopic(topic) {
     try {
-      await messaging().unsubscribeFromTopic(topic);
+      const app = getApp();
+      const messaging = getMessaging(app);
+      await unsubscribeFromTopic(messaging, topic);
       console.log(`Unsubscribed from topic: ${topic}`);
     } catch (error) {
       console.error("Error unsubscribing from topic:", error);
@@ -117,6 +137,17 @@ export class FirebaseService {
 }
 
 // Background message handler must be set outside of any component
-messaging().setBackgroundMessageHandler(async (remoteMessage) => {
-  console.log("Message handled in the background!", remoteMessage);
-});
+// Using modular API
+const initBackgroundHandler = () => {
+  try {
+    const app = getApp();
+    const messaging = getMessaging(app);
+    setBackgroundMessageHandler(messaging, async (remoteMessage) => {
+      console.log("Message handled in the background!", remoteMessage);
+    });
+  } catch (error) {
+    console.warn("Could not set background message handler:", error);
+  }
+};
+
+initBackgroundHandler();

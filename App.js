@@ -188,12 +188,12 @@ function AppNavigator() {
         <Stack.Screen
           name="OTP"
           component={OTPScreen}
-          options={{ title: "Verify OTP" }}
+          options={{ headerShown: false }}
         />
         <Stack.Screen
           name="UserDashboard"
           component={UserDashboard}
-          options={{ title: "TherapyConnect", headerShown: false }}
+          options={{ headerShown: false }}
         />
         <Stack.Screen
           name="Call"
