@@ -17,8 +17,6 @@ import { FirebaseService } from "./src/services/firebase";
 import LoginScreen from "./src/screens/LoginScreen";
 import OTPScreen from "./src/screens/OTPScreen";
 import UserDashboard from "./src/screens/UserDashboard";
-import CallScreen from "./src/screens/CallScreen";
-// TherapistLoginScreen is removed from User App navigation
 
 import {
   setAuth,
@@ -26,6 +24,7 @@ import {
   setFCMToken as setReduxFCMToken,
 } from "./src/store/authSlice";
 import api from "./src/services/api";
+import ZegoCallScreen from "./src/screens/ZegoCallScreen";
 
 const Stack = createStackNavigator();
 
@@ -196,8 +195,8 @@ function AppNavigator() {
           options={{ headerShown: false }}
         />
         <Stack.Screen
-          name="Call"
-          component={CallScreen}
+          name="ZegoCallScreen"
+          component={ZegoCallScreen}
           options={{ headerShown: false }}
         />
         {/* TherapistLoginScreen is REMOVED from User App navigation stack */}

@@ -1,21 +1,21 @@
 {
   "project_info": {
-    "project_number": "983235611396",
-    "project_id": "therapistconnect-76dd0",
-    "storage_bucket": "therapistconnect-76dd0.firebasestorage.app"
+    "project_number": "128468211897",
+    "project_id": "therapistconnect-91621",
+    "storage_bucket": "therapistconnect-91621.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:983235611396:android:b7e7194ee86c076d905e51",
+        "mobilesdk_app_id": "1:128468211897:android:8b9522435e1b4377286368",
         "android_client_info": {
-          "package_name": "com.therapistconnect"
+          "package_name": "com.therapistconnect.therapist"
         }
       },
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyDxr-I7awN13fdTtg7IvOnAwLf90huJ3vs"
+          "current_key": "AIzaSyCLc2_VIdbUwuTa1wRavTtlWZ_kHJ_8nYo"
         }
       ],
       "services": {
@@ -26,15 +26,15 @@
     },
     {
       "client_info": {
-        "mobilesdk_app_id": "1:983235611396:android:99ee1d31fd4f47c4905e51",
+        "mobilesdk_app_id": "1:128468211897:android:b3acc4b1009ace59286368",
         "android_client_info": {
-          "package_name": "com.therapyconnecttherapist"
+          "package_name": "com.therapistconnect.user"
         }
       },
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyDxr-I7awN13fdTtg7IvOnAwLf90huJ3vs"
+          "current_key": "AIzaSyCLc2_VIdbUwuTa1wRavTtlWZ_kHJ_8nYo"
         }
       ],
       "services": {

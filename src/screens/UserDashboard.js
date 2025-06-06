@@ -1,4 +1,4 @@
-// Fixed src/screens/UserDashboard.js - Proper socket connection
+// src/screens/UserDashboard.js - Fixed implementation with proper error handling
 import React, { useEffect, useState, useCallback } from "react";
 import {
   View,
@@ -19,6 +19,12 @@ import { useFocusEffect } from "@react-navigation/native";
 import { logout, updateUserBalance } from "../store/authSlice";
 import api from "../services/api";
 import socketService from "../services/socket";
+import ZegoCloudService from "../services/zegoCloudService";
+import {
+  CALL_TYPES,
+  CALL_PRICING,
+  validateZegoConfig,
+} from "../config/zegoConfig";
 import LinearGradient from "react-native-linear-gradient";
 
 const { width } = Dimensions.get("window");
@@ -29,6 +35,8 @@ export default function UserDashboard({ navigation }) {
   const [calling, setCalling] = useState(false);
   const [currentCall, setCurrentCall] = useState(null);
   const [showCallModal, setShowCallModal] = useState(false);
+  const [showCallTypeModal, setShowCallTypeModal] = useState(false);
+  const [selectedTherapist, setSelectedTherapist] = useState(null);
   const [activeTab, setActiveTab] = useState("therapists");
   const [callHistory, setCallHistory] = useState([]);
   const [showProfileModal, setShowProfileModal] = useState(false);
@@ -39,14 +47,34 @@ export default function UserDashboard({ navigation }) {
     totalSpent: 0,
     totalMinutes: 0,
   });
+  const [zegoConfigValid, setZegoConfigValid] = useState(false);
+  const [socketConnected, setSocketConnected] = useState(false);
+
   const { user } = useSelector((state) => state.auth);
   const dispatch = useDispatch();
+
+  // Check ZegoCloud configuration on mount
+  useEffect(() => {
+    const config = validateZegoConfig();
+    setZegoConfigValid(config.isValid);
+
+    if (!config.isValid) {
+      console.warn("ZegoCloud configuration issues:", config.errors);
+      Alert.alert(
+        "Configuration Error",
+        "Call functionality requires proper ZegoCloud setup. Please contact support.",
+        [{ text: "OK" }]
+      );
+    }
+  }, []);
 
   // Refresh data when screen comes into focus
   useFocusEffect(
     useCallback(() => {
       console.log("User dashboard focused, refreshing data...");
-      fetchAllData();
+      fetchAllData().catch((error) => {
+        console.error("Error refreshing data on focus:", error);
+      });
     }, [])
   );
 
@@ -54,111 +82,149 @@ export default function UserDashboard({ navigation }) {
   useEffect(() => {
     const balanceRefreshInterval = setInterval(() => {
       if (activeTab === "therapists") {
-        fetchUserBalance();
+        fetchUserBalance().catch((error) => {
+          console.error("Error during auto-refresh balance:", error);
+        });
       }
     }, 30000);
 
     return () => clearInterval(balanceRefreshInterval);
   }, [activeTab]);
 
+  // FIXED: Socket connection with proper error handling
   useEffect(() => {
     if (user) {
-      fetchTherapists();
-      fetchCallHistory();
-      fetchUserStats();
-
-      // FIXED: Connect socket with proper user data
-      const socket = socketService.connect();
-
-      console.log("🔗 Connecting user to socket:", user.id);
-      socketService.emit("user-connect", {
-        userId: user.id,
-        userInfo: {
-          phoneNumber: user.phoneNumber,
-          coinBalance: user.coinBalance,
-        },
+      initializeData().catch((error) => {
+        console.error("Error initializing user data:", error);
       });
 
-      // Listen for connection confirmation
-      socketService.on("connection-confirmed", (data) => {
-        console.log("✅ User socket connection confirmed:", data);
-      });
+      // Connect socket with proper user data
+      try {
+        const socket = socketService.connect();
 
-      // Listen for call events
-      socketService.on("call-accepted", (data) => {
-        console.log("✅ Call accepted by therapist:", data);
-        setCalling(false);
-        setShowCallModal(false);
-        setCurrentCall(null);
-        if (callTimeout) {
-          clearTimeout(callTimeout);
-          setCallTimeout(null);
+        if (!socket) {
+          console.error("Failed to get socket instance");
+          return;
         }
 
-        navigation.navigate("Call", {
-          roomId: data.roomId,
-          therapistId: data.therapistId,
-          isInitiator: true,
+        console.log("🔗 Connecting user to socket:", user.id);
+
+        // Setup socket listeners first
+        setupSocketListeners(socket);
+
+        // Then emit user connection
+        socketService.emit("user-connect", {
+          userId: user.id,
+          userInfo: {
+            phoneNumber: user.phoneNumber,
+            coinBalance: user.coinBalance,
+          },
         });
-      });
 
-      socketService.on("call-rejected", (data) => {
-        console.log("❌ Call rejected by therapist:", data);
-        setCalling(false);
-        setShowCallModal(false);
-        setCurrentCall(null);
-        if (callTimeout) {
-          clearTimeout(callTimeout);
-          setCallTimeout(null);
-        }
-        Alert.alert(
-          "Call Rejected",
-          "The therapist is not available right now"
-        );
-      });
+        // Listen for connection confirmation
+        socketService.on("connection-confirmed", (data) => {
+          console.log("✅ User socket connection confirmed:", data);
+          setSocketConnected(true);
+        });
 
-      socketService.on("call-timeout", (data) => {
-        console.log("⏰ Call timeout:", data);
-        setCalling(false);
-        setShowCallModal(false);
-        setCurrentCall(null);
-        if (callTimeout) {
-          clearTimeout(callTimeout);
-          setCallTimeout(null);
-        }
-        Alert.alert("Call Timeout", "The therapist didn't respond in time");
-      });
+        socketService.on("connect", () => {
+          console.log("Socket connected successfully");
+          setSocketConnected(true);
+        });
 
-      // Listen for call end to refresh balance
-      socketService.on("call-ended", () => {
-        console.log("📞 Call ended, refreshing balance...");
-        setTimeout(() => {
-          fetchUserBalance();
-          fetchCallHistory();
-          fetchUserStats();
-        }, 1000);
-      });
+        socketService.on("disconnect", () => {
+          console.log("Socket disconnected");
+          setSocketConnected(false);
+        });
 
-      // Debug connection status
-      socketService.emit("debug-connections");
-      socketService.on("debug-info", (data) => {
-        console.log("🔍 User debug info:", data);
-      });
+        socketService.on("connect_error", (error) => {
+          console.error("Socket connection error:", error);
+          setSocketConnected(false);
+        });
+      } catch (error) {
+        console.error("Error setting up socket connection:", error);
+      }
 
       return () => {
-        socketService.off("connection-confirmed");
-        socketService.off("call-accepted");
-        socketService.off("call-rejected");
-        socketService.off("call-timeout");
-        socketService.off("call-ended");
-        socketService.off("debug-info");
-        socketService.disconnect();
+        cleanupSocket();
         if (callTimeout) {
           clearTimeout(callTimeout);
         }
       };
     }
   }, [user]);
+
+  const initializeData = async () => {
+    try {
+      await Promise.all([
+        fetchTherapists(),
+        fetchCallHistory(),
+        fetchUserStats(),
+      ]);
+    } catch (error) {
+      console.error("Error initializing data:", error);
+    }
+  };
+
+  const setupSocketListeners = (socket) => {
+    // Listen for call events with proper error handling
+    socketService.on("call-accepted", (data) => {
+      console.log("✅ Call accepted by therapist:", data);
+      try {
+        handleCallAccepted(data);
+      } catch (error) {
+        console.error("Error handling call accepted:", error);
+      }
+    });
+
+    socketService.on("call-rejected", (data) => {
+      console.log("❌ Call rejected by therapist:", data);
+      try {
+        handleCallRejected(data);
+      } catch (error) {
+        console.error("Error handling call rejected:", error);
+      }
+    });
+
+    socketService.on("call-timeout", (data) => {
+      console.log("⏰ Call timeout:", data);
+      try {
+        handleCallTimeout(data);
+      } catch (error) {
+        console.error("Error handling call timeout:", error);
+      }
+    });
+
+    // Listen for call end to refresh balance
+    socketService.on("call-ended", () => {
+      console.log("📞 Call ended, refreshing balance...");
+      setTimeout(() => {
+        Promise.all([
+          fetchUserBalance(),
+          fetchCallHistory(),
+          fetchUserStats(),
+        ]).catch((error) => {
+          console.error("Error refreshing data after call end:", error);
+        });
+      }, 1000);
+    });
+  };
+
+  const cleanupSocket = () => {
+    try {
+      socketService.off("connection-confirmed");
+      socketService.off("call-accepted");
+      socketService.off("call-rejected");
+      socketService.off("call-timeout");
+      socketService.off("call-ended");
+      socketService.off("connect");
+      socketService.off("disconnect");
+      socketService.off("connect_error");
+      socketService.disconnect();
+    } catch (error) {
+      console.error("Error during socket cleanup:", error);
+    }
+  };
 
   const fetchAllData = async () => {
     setRefreshing(true);
@@ -180,8 +246,9 @@ export default function UserDashboard({ navigation }) {
     if (showLoading) setLoading(true);
     try {
       const response = await api.get("/user/therapists");
-      setTherapists(response.data.therapists);
+      setTherapists(response.data.therapists || []);
     } catch (error) {
+      console.error("Error fetching therapists:", error);
       if (showLoading) {
         Alert.alert("Error", "Failed to fetch therapists");
       }
@@ -205,12 +272,11 @@ export default function UserDashboard({ navigation }) {
       const updatedUser = response.data.user;
       dispatch(updateUserBalance(updatedUser.coinBalance));
 
-      // Update user stats from profile
-      setUserStats({
+      setUserStats((prev) => ({
+        ...prev,
         totalCalls: updatedUser.totalCalls || 0,
         totalSpent: updatedUser.totalSpent || 0,
-        totalMinutes: 0, // Will be updated by fetchUserStats
-      });
+      }));
     } catch (error) {
       console.error("Error fetching user profile:", error);
     }
@@ -238,7 +304,6 @@ export default function UserDashboard({ navigation }) {
         currentBalance: response.data.currentBalance || 0,
       });
 
-      // Also update balance in Redux if different
       if (response.data.currentBalance !== user.coinBalance) {
         dispatch(updateUserBalance(response.data.currentBalance));
       }
@@ -247,64 +312,139 @@ export default function UserDashboard({ navigation }) {
     }
   };
 
-  const initiateCall = async (therapist) => {
-    if (calling) return;
+  const showCallTypeSelection = (therapist) => {
+    if (!zegoConfigValid) {
+      Alert.alert(
+        "Service Unavailable",
+        "Call functionality is temporarily unavailable. Please try again later.",
+        [{ text: "OK" }]
+      );
+      return;
+    }
+
+    if (!socketConnected) {
+      Alert.alert(
+        "Connection Error",
+        "Not connected to server. Please check your internet connection and try again.",
+        [{ text: "OK" }]
+      );
+      return;
+    }
+
+    setSelectedTherapist(therapist);
+    setShowCallTypeModal(true);
+  };
+
+  const initiateCall = async (therapist, callType = CALL_TYPES.VOICE) => {
+    if (calling) {
+      console.log("Call already in progress, ignoring");
+      return;
+    }
+
+    // Check ZegoCloud configuration
+    if (!zegoConfigValid) {
+      Alert.alert(
+        "Service Error",
+        "Call service is not properly configured. Please contact support.",
+        [{ text: "OK" }]
+      );
+      return;
+    }
+
+    // Check socket connection
+    if (!socketConnected) {
+      Alert.alert(
+        "Connection Error",
+        "Not connected to server. Please check your internet connection.",
+        [{ text: "OK" }]
+      );
+      return;
+    }
 
     // Check balance before call
-    await fetchUserBalance();
+    try {
+      await fetchUserBalance();
+    } catch (error) {
+      console.error("Error fetching balance before call:", error);
+    }
 
-    if (user.coinBalance < 5) {
+    const requiredCoins = CALL_PRICING[callType].costPerMinute;
+    if (user.coinBalance < requiredCoins) {
       Alert.alert(
         "Insufficient Balance",
-        "You need at least 5 coins to make a call. Each minute costs 5 coins."
+        `You need at least ${requiredCoins} coins to make a ${callType} call. Each minute costs ${requiredCoins} coins.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Top Up",
+            onPress: () => {
+              /* Navigate to top-up screen */
+            },
+          },
+        ]
       );
       return;
     }
 
     try {
       setCalling(true);
-      setCurrentCall({ therapist, roomId: null });
+      setShowCallTypeModal(false);
 
-      console.log("🔥 Initiating call to therapist:", therapist._id);
+      // Generate ZegoCloud call ID
+      const zegoCallId = ZegoCloudService.generateCallID(
+        user.id,
+        therapist._id
+      );
+
+      console.log(
+        "🔥 Initiating call to therapist:",
+        therapist._id,
+        "Type:",
+        callType,
+        "ZegoCallId:",
+        zegoCallId
+      );
 
       const response = await api.post("/call/initiate", {
         therapistId: therapist._id,
+        callType,
+        zegoCallId,
       });
 
-      console.log("✅ Call initiated, room ID:", response.data.roomId);
+      console.log("✅ Call initiated, response:", response.data);
 
-      setCurrentCall({
+      const callData = {
         therapist,
         roomId: response.data.roomId,
         callId: response.data.callId,
-      });
+        zegoCallId: response.data.zegoCallId || zegoCallId,
+        callType,
+      };
+
+      setCurrentCall(callData);
       setShowCallModal(true);
 
       // Join the room first
       console.log("🏠 Joining room:", response.data.roomId);
       socketService.emit("join-room", response.data.roomId);
 
-      // Then emit call request to therapist
+      // Send call request to therapist
       console.log("📤 Sending call-therapist event");
       socketService.emit("call-therapist", {
         therapistId: therapist._id,
         userId: user.id,
-        userName: user.name || "User",
+        userName: user.name || user.phoneNumber,
         roomId: response.data.roomId,
         callId: response.data.callId,
+        zegoCallId: callData.zegoCallId,
+        callType,
       });
 
       // Set timeout for call (30 seconds)
       const timeout = setTimeout(() => {
         console.log("⏰ Call timeout - no response from therapist");
-        setCalling(false);
-        setShowCallModal(false);
-        setCurrentCall(null);
-        Alert.alert(
-          "Call Timeout",
-          "The therapist didn't respond. Please try again later."
-        );
-      }, 30000);
+        handleCallTimeout();
+      }, 10000);
 
       setCallTimeout(timeout);
     } catch (error) {
@@ -312,8 +452,104 @@ export default function UserDashboard({ navigation }) {
       setCalling(false);
       setCurrentCall(null);
       setShowCallModal(false);
-      Alert.alert("Error", "Failed to initiate call. Please try again.");
+
+      // Show specific error message
+      const errorMessage =
+        error.response?.data?.error ||
+        "Failed to initiate call. Please try again.";
+      Alert.alert("Error", errorMessage);
     }
+  };
+
+  const handleCallAccepted = (data) => {
+    console.log("✅ Call accepted:", data);
+    setCalling(false);
+    setShowCallModal(false);
+
+    if (callTimeout) {
+      clearTimeout(callTimeout);
+      setCallTimeout(null);
+    }
+
+    if (!currentCall) {
+      console.error("No current call data available");
+      Alert.alert("Error", "Call data not available");
+      return;
+    }
+
+    try {
+      // Ensure we have a valid zegoCallId
+      const finalZegoCallId =
+        currentCall.zegoCallId ||
+        data.zegoCallId ||
+        `zego_${currentCall.callId}_${Date.now()}`;
+
+      console.log("Using zegoCallId for user:", finalZegoCallId);
+
+      // Validate ZegoCloud credentials
+      const appCredentials = ZegoCloudService.getAppCredentials();
+      if (!appCredentials.appID || !appCredentials.appSign) {
+        throw new Error("ZegoCloud credentials not properly configured");
+      }
+
+      const userID = ZegoCloudService.generateUserID(user);
+      if (!userID) {
+        throw new Error("Failed to generate user ID");
+      }
+
+      // Navigate to ZegoCloud call screen
+      navigation.navigate("ZegoCallScreen", {
+        appID: appCredentials.appID,
+        appSign: appCredentials.appSign,
+        userID: userID,
+        userName: user.phoneNumber || user.name || "User",
+        callID: finalZegoCallId,
+        callType: currentCall.callType,
+        isInitiator: true,
+        internalCallId: currentCall.callId,
+        therapistName: currentCall.therapist.name,
+      });
+
+      setCurrentCall(null);
+    } catch (error) {
+      console.error("Error navigating to call screen:", error);
+      Alert.alert("Error", `Failed to join call: ${error.message}`);
+      setCurrentCall(null);
+    }
+  };
+
+  const handleCallRejected = (data) => {
+    console.log("❌ Call rejected:", data);
+    setCalling(false);
+    setShowCallModal(false);
+    setCurrentCall(null);
+
+    if (callTimeout) {
+      clearTimeout(callTimeout);
+      setCallTimeout(null);
+    }
+
+    Alert.alert(
+      "Call Rejected",
+      "The therapist is not available right now. Please try again later."
+    );
+  };
+
+  const handleCallTimeout = (data = null) => {
+    console.log("⏰ Call timeout", data);
+    setCalling(false);
+    setShowCallModal(false);
+    setCurrentCall(null);
+
+    if (callTimeout) {
+      clearTimeout(callTimeout);
+      setCallTimeout(null);
+    }
+
+    Alert.alert(
+      "Call Timeout",
+      "The therapist didn't respond in time. Please try again later."
+    );
   };
 
   const cancelCall = () => {
@@ -327,28 +563,40 @@ export default function UserDashboard({ navigation }) {
     }
 
     if (currentCall && currentCall.roomId) {
-      socketService.emit("cancel-call", {
-        callId: currentCall.callId,
-        userId: user.id,
-        therapistId: currentCall.therapist._id,
-        roomId: currentCall.roomId,
-      });
+      try {
+        socketService.emit("cancel-call", {
+          callId: currentCall.callId,
+          userId: user.id,
+          therapistId: currentCall.therapist._id,
+          roomId: currentCall.roomId,
+        });
+      } catch (error) {
+        console.error("Error cancelling call:", error);
+      }
     }
 
     setCurrentCall(null);
   };
 
   const onRefresh = useCallback(() => {
-    fetchAllData();
+    fetchAllData().catch((error) => {
+      console.error("Error during refresh:", error);
+    });
   }, []);
 
   const handleTabChange = (tab) => {
     setActiveTab(tab);
     if (tab === "history") {
-      fetchCallHistory(false);
+      fetchCallHistory(false).catch((error) => {
+        console.error("Error fetching call history:", error);
+      });
     } else if (tab === "therapists") {
-      fetchTherapists(false);
-      fetchUserBalance(); // Refresh balance when switching to therapists tab
+      fetchTherapists(false).catch((error) => {
+        console.error("Error fetching therapists:", error);
+      });
+      fetchUserBalance().catch((error) => {
+        console.error("Error fetching balance:", error);
+      });
     }
   };
 
@@ -359,6 +607,7 @@ export default function UserDashboard({ navigation }) {
         text: "Logout",
         style: "destructive",
         onPress: () => {
+          cleanupSocket();
           dispatch(logout());
           navigation.reset({
             index: 0,
@@ -394,21 +643,38 @@ export default function UserDashboard({ navigation }) {
         <View style={styles.statusContainer}>
           <View style={styles.statusDot} />
           <Text style={styles.therapistStatus}>Available</Text>
+          {!socketConnected && (
+            <Text style={styles.connectionStatus}> (Offline)</Text>
+          )}
         </View>
-        <Text style={styles.therapistMeta}>💰 5 coins/min</Text>
+        <Text style={styles.therapistMeta}>
+          💰 Voice: {CALL_PRICING[CALL_TYPES.VOICE].costPerMinute} coins/min |
+          Video: {CALL_PRICING[CALL_TYPES.VIDEO].costPerMinute} coins/min
+        </Text>
       </View>
       <TouchableOpacity
         style={[
           styles.callButton,
-          (calling || !user.coinBalance || user.coinBalance < 5) &&
+          (calling ||
+            !user.coinBalance ||
+            user.coinBalance < CALL_PRICING[CALL_TYPES.VOICE].costPerMinute ||
+            !socketConnected) &&
             styles.disabledButton,
         ]}
-        onPress={() => initiateCall(item)}
-        disabled={calling || !user.coinBalance || user.coinBalance < 5}
+        onPress={() => showCallTypeSelection(item)}
+        disabled={
+          calling ||
+          !user.coinBalance ||
+          user.coinBalance < CALL_PRICING[CALL_TYPES.VOICE].costPerMinute ||
+          !socketConnected
+        }
       >
         <LinearGradient
           colors={
-            calling || !user.coinBalance || user.coinBalance < 5
+            calling ||
+            !user.coinBalance ||
+            user.coinBalance < CALL_PRICING[CALL_TYPES.VOICE].costPerMinute ||
+            !socketConnected
               ? ["#ccc", "#ccc"]
               : ["#4CAF50", "#45a049"]
           }
@@ -440,6 +706,9 @@ export default function UserDashboard({ navigation }) {
             {item.therapistId?.name || "Unknown Therapist"}
           </Text>
           <Text style={styles.historyDate}>{formatDate(item.startTime)}</Text>
+          <Text style={styles.historyCallType}>
+            {item.callType === CALL_TYPES.VIDEO ? "📹 Video" : "🎤 Voice"} Call
+          </Text>
         </View>
         <View style={styles.historyMeta}>
           <Text style={styles.historyDuration}>
@@ -478,7 +747,6 @@ export default function UserDashboard({ navigation }) {
   const getStatusText = (status) => {
     switch (status) {
       case "ended_by_user":
-        return "Completed";
       case "ended_by_therapist":
         return "Completed";
       case "missed":
@@ -490,6 +758,95 @@ export default function UserDashboard({ navigation }) {
     }
   };
 
+  // Call Type Selection Modal
+  const CallTypeSelectionModal = () => (
+    <Modal
+      visible={showCallTypeModal}
+      transparent
+      animationType="slide"
+      onRequestClose={() => setShowCallTypeModal(false)}
+    >
+      <View style={styles.modalContainer}>
+        <View style={styles.callTypeModalContent}>
+          <Text style={styles.callTypeTitle}>Choose Call Type</Text>
+          <Text style={styles.callTypeSubtitle}>
+            with {selectedTherapist?.name}
+          </Text>
+
+          <View style={styles.callTypeOptions}>
+            <TouchableOpacity
+              style={styles.callTypeOption}
+              onPress={() => initiateCall(selectedTherapist, CALL_TYPES.VOICE)}
+              disabled={
+                user.coinBalance <
+                  CALL_PRICING[CALL_TYPES.VOICE].costPerMinute ||
+                !socketConnected
+              }
+            >
+              <LinearGradient
+                colors={
+                  user.coinBalance >=
+                    CALL_PRICING[CALL_TYPES.VOICE].costPerMinute &&
+                  socketConnected
+                    ? ["#4CAF50", "#45a049"]
+                    : ["#ccc", "#ccc"]
+                }
+                style={styles.callTypeOptionGradient}
+              >
+                <Text style={styles.callTypeIcon}>🎤</Text>
+                <Text style={styles.callTypeOptionTitle}>Voice Call</Text>
+                <Text style={styles.callTypePrice}>
+                  {CALL_PRICING[CALL_TYPES.VOICE].costPerMinute} coins/min
+                </Text>
+              </LinearGradient>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.callTypeOption}
+              onPress={() => initiateCall(selectedTherapist, CALL_TYPES.VIDEO)}
+              disabled={
+                user.coinBalance <
+                  CALL_PRICING[CALL_TYPES.VIDEO].costPerMinute ||
+                !socketConnected
+              }
+            >
+              <LinearGradient
+                colors={
+                  user.coinBalance >=
+                    CALL_PRICING[CALL_TYPES.VIDEO].costPerMinute &&
+                  socketConnected
+                    ? ["#2196F3", "#1976D2"]
+                    : ["#ccc", "#ccc"]
+                }
+                style={styles.callTypeOptionGradient}
+              >
+                <Text style={styles.callTypeIcon}>📹</Text>
+                <Text style={styles.callTypeOptionTitle}>Video Call</Text>
+                <Text style={styles.callTypePrice}>
+                  {CALL_PRICING[CALL_TYPES.VIDEO].costPerMinute} coins/min
+                </Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+
+          {!socketConnected && (
+            <Text style={styles.connectionWarning}>
+              ⚠️ Not connected to server
+            </Text>
+          )}
+
+          <TouchableOpacity
+            style={styles.cancelCallTypeButton}
+            onPress={() => setShowCallTypeModal(false)}
+          >
+            <Text style={styles.cancelCallTypeText}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  // Calling Modal (existing modal with slight updates)
   const CallingModal = () => (
     <Modal
       visible={showCallModal}
@@ -503,7 +860,12 @@ export default function UserDashboard({ navigation }) {
           style={styles.callingModalContent}
         >
           <View style={styles.callingHeader}>
-            <Text style={styles.callingTitle}>Calling...</Text>
+            <Text style={styles.callingTitle}>
+              {currentCall?.callType === CALL_TYPES.VIDEO
+                ? "📹 Video"
+                : "🎤 Voice"}{" "}
+              Calling...
+            </Text>
             <Text style={styles.callingSubtitle}>
               Connecting you with your therapist
             </Text>
@@ -519,6 +881,14 @@ export default function UserDashboard({ navigation }) {
               {currentCall?.therapist?.name || "Therapist"}
             </Text>
             <Text style={styles.callingStatus}>Waiting for response...</Text>
+            <Text style={styles.callingCost}>
+              Cost:{" "}
+              {
+                CALL_PRICING[currentCall?.callType || CALL_TYPES.VOICE]
+                  .costPerMinute
+              }{" "}
+              coins/min
+            </Text>
 
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="large" color="#fff" />
@@ -561,6 +931,26 @@ export default function UserDashboard({ navigation }) {
             <Text style={styles.profileLabel}>Total Talk Time</Text>
             <Text style={styles.profileValue}>
               {formatDuration(userStats.totalMinutes)}
+            </Text>
+          </View>
+
+          <View style={styles.profileInfo}>
+            <Text style={styles.profileLabel}>Voice Calls Made</Text>
+            <Text style={styles.profileValue}>
+              {
+                callHistory.filter((call) => call.callType === CALL_TYPES.VOICE)
+                  .length
+              }
+            </Text>
+          </View>
+
+          <View style={styles.profileInfo}>
+            <Text style={styles.profileLabel}>Video Calls Made</Text>
+            <Text style={styles.profileValue}>
+              {
+                callHistory.filter((call) => call.callType === CALL_TYPES.VIDEO)
+                  .length
+              }
             </Text>
           </View>
 
@@ -610,6 +1000,18 @@ export default function UserDashboard({ navigation }) {
                 <View style={styles.lowBalanceIndicator}>
                   <Text style={styles.lowBalanceText}>Low</Text>
                 </View>
+              )}
+            </View>
+            <View style={styles.statusIndicators}>
+              {!zegoConfigValid && (
+                <Text style={styles.serviceWarningText}>
+                  ⚠️ Call service unavailable
+                </Text>
+              )}
+              {!socketConnected && (
+                <Text style={styles.connectionWarningText}>
+                  🔴 Connection lost
+                </Text>
               )}
             </View>
           </View>
@@ -731,13 +1133,14 @@ export default function UserDashboard({ navigation }) {
         )}
       </View>
 
+      <CallTypeSelectionModal />
       <CallingModal />
       <ProfileModal />
     </View>
   );
 }
 
-// Styles remain the same as your original file
+// Enhanced styles with connection status indicators
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -778,6 +1181,7 @@ const styles = StyleSheet.create({
   coinContainer: {
     flexDirection: "row",
     alignItems: "center",
+    marginBottom: 4,
   },
   coinIcon: {
     fontSize: 16,
@@ -799,6 +1203,19 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 12,
     fontWeight: "600",
+  },
+  statusIndicators: {
+    flexDirection: "column",
+  },
+  serviceWarningText: {
+    color: "#ffeb3b",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  connectionWarningText: {
+    color: "#ff6b6b",
+    fontSize: 12,
+    fontWeight: "500",
   },
   logoutButton: {
     padding: 10,
@@ -939,6 +1356,11 @@ const styles = StyleSheet.create({
     color: "#4CAF50",
     fontWeight: "500",
   },
+  connectionStatus: {
+    fontSize: 12,
+    color: "#ff6b6b",
+    fontWeight: "500",
+  },
   therapistMeta: {
     fontSize: 12,
     color: "#666",
@@ -1008,6 +1430,12 @@ const styles = StyleSheet.create({
   historyDate: {
     fontSize: 12,
     color: "#666",
+    marginBottom: 2,
+  },
+  historyCallType: {
+    fontSize: 12,
+    color: "#888",
+    fontWeight: "500",
   },
   historyMeta: {
     alignItems: "flex-end",
@@ -1091,9 +1519,6 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     color: "#333",
   },
-  balanceText: {
-    color: "#4CAF50",
-  },
   modalCloseButton: {
     backgroundColor: "#667eea",
     paddingVertical: 15,
@@ -1105,6 +1530,76 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "bold",
     textAlign: "center",
+  },
+  // Call Type Selection Modal Styles
+  callTypeModalContent: {
+    backgroundColor: "#fff",
+    padding: 30,
+    borderRadius: 25,
+    width: width * 0.9,
+    elevation: 15,
+  },
+  callTypeTitle: {
+    fontSize: 24,
+    fontWeight: "bold",
+    marginBottom: 8,
+    textAlign: "center",
+    color: "#333",
+  },
+  callTypeSubtitle: {
+    fontSize: 16,
+    color: "#666",
+    textAlign: "center",
+    marginBottom: 30,
+  },
+  callTypeOptions: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 25,
+  },
+  callTypeOption: {
+    flex: 1,
+    marginHorizontal: 8,
+    borderRadius: 15,
+    overflow: "hidden",
+  },
+  callTypeOptionGradient: {
+    padding: 20,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  callTypeIcon: {
+    fontSize: 32,
+    marginBottom: 10,
+  },
+  callTypeOptionTitle: {
+    fontSize: 16,
+    fontWeight: "bold",
+    color: "#fff",
+    marginBottom: 5,
+  },
+  callTypePrice: {
+    fontSize: 12,
+    color: "#fff",
+    opacity: 0.9,
+  },
+  connectionWarning: {
+    color: "#ff6b6b",
+    fontSize: 12,
+    textAlign: "center",
+    marginBottom: 15,
+    fontWeight: "500",
+  },
+  cancelCallTypeButton: {
+    backgroundColor: "#f5f5f5",
+    paddingVertical: 15,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  cancelCallTypeText: {
+    color: "#666",
+    fontSize: 16,
+    fontWeight: "600",
   },
   // Calling Modal Styles
   callingModalContainer: {
@@ -1167,6 +1662,12 @@ const styles = StyleSheet.create({
   callingStatus: {
     fontSize: 16,
     color: "rgba(255, 255, 255, 0.8)",
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  callingCost: {
+    fontSize: 14,
+    color: "rgba(255, 255, 255, 0.7)",
     textAlign: "center",
     marginBottom: 20,
   },
