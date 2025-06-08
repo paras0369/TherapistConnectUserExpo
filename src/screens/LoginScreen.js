@@ -13,7 +13,7 @@ import {
 } from "react-native";
 import { useDispatch, useSelector } from "react-redux";
 import { sendOTP } from "../store/authSlice"; // Assuming path is correct for Expo structure
-import { FirebaseService } from "../services/firebase"; // Assuming path is correct
+// Assuming path is correct
 import LinearGradient from "react-native-linear-gradient";
 
 const { width, height } = Dimensions.get("window");
@@ -27,16 +27,6 @@ export default function LoginScreen({ navigation }) {
   useEffect(() => {
     initializeFirebase();
   }, []);
-
-  const initializeFirebase = async () => {
-    try {
-      const token = await FirebaseService.getFCMToken();
-      setFcmToken(token);
-      console.log("User App - FCM Token obtained for Login:", token);
-    } catch (error) {
-      console.error("User App - Error initializing Firebase on Login:", error);
-    }
-  };
 
   const handleSendOTP = async () => {
     if (!phoneNumber || phoneNumber.length < 10) {

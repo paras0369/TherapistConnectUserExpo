@@ -1,5 +1,4 @@
-// src/screens/OTPScreen.js
-// Updated src/screens/OTPScreen.js - Send FCM token with verification
+// src/screens/OTPScreen.js - Simplified without Firebase
 import React, { useState, useRef, useEffect } from "react";
 import {
   View,
@@ -20,7 +19,7 @@ import LinearGradient from "react-native-linear-gradient";
 const { width } = Dimensions.get("window");
 
 export default function OTPScreen({ route, navigation }) {
-  const { phoneNumber, fcmToken } = route.params;
+  const { phoneNumber } = route.params;
   const [otp, setOtp] = useState(["", "", "", "", "", ""]);
   const [timer, setTimer] = useState(30);
   const [canResend, setCanResend] = useState(false);
@@ -128,7 +127,6 @@ export default function OTPScreen({ route, navigation }) {
         verifyOTP({
           phoneNumber,
           otp: otpString,
-          fcmToken,
         })
       ).unwrap();
       navigation.reset({
@@ -186,13 +184,11 @@ export default function OTPScreen({ route, navigation }) {
 
   const isOtpComplete = otp.every((digit) => digit !== "");
 
-  // Rest of the component remains the same with existing styles...
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#667eea" />
 
       <LinearGradient colors={["#667eea", "#764ba2"]} style={styles.gradient}>
-        {/* Header */}
         <View style={styles.header}>
           <View style={styles.iconContainer}>
             <View style={styles.messageIcon}>
@@ -204,7 +200,6 @@ export default function OTPScreen({ route, navigation }) {
           <Text style={styles.phoneNumber}>{phoneNumber}</Text>
         </View>
 
-        {/* OTP Input Section */}
         <View style={styles.otpContainer}>
           <View style={styles.card}>
             <Text style={styles.otpTitle}>Enter Verification Code</Text>
@@ -263,7 +258,6 @@ export default function OTPScreen({ route, navigation }) {
               </LinearGradient>
             </TouchableOpacity>
 
-            {/* Resend Section */}
             <View style={styles.resendContainer}>
               {!canResend ? (
                 <Text style={styles.timerText}>
@@ -290,7 +284,6 @@ export default function OTPScreen({ route, navigation }) {
           </View>
         </View>
 
-        {/* Bottom */}
         <View style={styles.footer}>
           <TouchableOpacity
             style={styles.backButton}

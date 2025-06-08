@@ -19,7 +19,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { logout, updateUserBalance } from "../store/authSlice";
 import api from "../services/api";
 import socketService from "../services/socket";
-import ZegoCloudService from "../services/zegoCloudService";
+import unifiedZegoService from "../services/unifiedZegoService";
 import {
   CALL_TYPES,
   CALL_PRICING,
@@ -391,7 +391,7 @@ export default function UserDashboard({ navigation }) {
       setShowCallTypeModal(false);
 
       // Generate ZegoCloud call ID
-      const zegoCallId = ZegoCloudService.generateCallID(
+      const zegoCallId = unifiedZegoService.generateCallId(
         user.id,
         therapist._id
       );
@@ -471,6 +471,7 @@ export default function UserDashboard({ navigation }) {
       setCallTimeout(null);
     }
 
+    // Don't clear currentCall here - we need it for navigation
     if (!currentCall) {
       console.error("No current call data available");
       Alert.alert("Error", "Call data not available");
@@ -478,21 +479,28 @@ export default function UserDashboard({ navigation }) {
     }
 
     try {
+      // Merge the accepted call data with current call
+      const mergedCallData = {
+        ...currentCall,
+        ...data, // This includes any additional data from acceptance
+        accepted: true,
+      };
+
       // Ensure we have a valid zegoCallId
       const finalZegoCallId =
-        currentCall.zegoCallId ||
+        mergedCallData.zegoCallId ||
         data.zegoCallId ||
-        `zego_${currentCall.callId}_${Date.now()}`;
+        `zego_${mergedCallData.callId}_${Date.now()}`;
 
       console.log("Using zegoCallId for user:", finalZegoCallId);
 
       // Validate ZegoCloud credentials
-      const appCredentials = ZegoCloudService.getAppCredentials();
+      const appCredentials = unifiedZegoService.getAppCredentials(); // Updated method call
       if (!appCredentials.appID || !appCredentials.appSign) {
         throw new Error("ZegoCloud credentials not properly configured");
       }
 
-      const userID = ZegoCloudService.generateUserID(user);
+      const userID = unifiedZegoService.generateUserID(user); // Updated method call
       if (!userID) {
         throw new Error("Failed to generate user ID");
       }
@@ -504,12 +512,13 @@ export default function UserDashboard({ navigation }) {
         userID: userID,
         userName: user.phoneNumber || user.name || "User",
         callID: finalZegoCallId,
-        callType: currentCall.callType,
+        callType: mergedCallData.callType,
         isInitiator: true,
-        internalCallId: currentCall.callId,
-        therapistName: currentCall.therapist.name,
+        internalCallId: mergedCallData.callId,
+        therapistName: mergedCallData.therapist.name,
       });
 
+      // Clear currentCall AFTER successful navigation
       setCurrentCall(null);
     } catch (error) {
       console.error("Error navigating to call screen:", error);
