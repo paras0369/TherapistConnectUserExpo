@@ -20,33 +20,20 @@ const { width, height } = Dimensions.get("window");
 
 export default function LoginScreen({ navigation }) {
   const [phoneNumber, setPhoneNumber] = useState("");
-  const [fcmToken, setFcmToken] = useState(null);
   const dispatch = useDispatch();
   const { loading } = useSelector((state) => state.auth);
 
-  useEffect(() => {
-    initializeFirebase();
-  }, []);
 
   const handleSendOTP = async () => {
     if (!phoneNumber || phoneNumber.length < 10) {
       Alert.alert("Error", "Please enter a valid phone number");
       return;
     }
-    if (!fcmToken) {
-      Alert.alert(
-        "Setup Incomplete",
-        "FCM token not yet available. Please wait a moment and try again."
-      );
-      // Optionally, try to fetch it again
-      // await initializeFirebase();
-      return;
-    }
 
     try {
       // In the User app, fcmToken is passed to OTP screen, then with verifyOTP
       await dispatch(sendOTP(phoneNumber)).unwrap();
-      navigation.navigate("OTP", { phoneNumber, fcmToken });
+      navigation.navigate("OTP", { phoneNumber });
     } catch (error) {
       Alert.alert("Error", "Failed to send OTP. Please try again.");
     }

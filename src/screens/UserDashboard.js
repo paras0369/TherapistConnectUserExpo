@@ -112,18 +112,19 @@ export default function UserDashboard({ navigation }) {
         // Setup socket listeners first
         setupSocketListeners(socket);
 
-        // Then emit user connection
-        socketService.emit("user-connect", {
-          userId: user.id,
-          userInfo: {
-            phoneNumber: user.phoneNumber,
-            coinBalance: user.coinBalance,
-          },
+        // Wait for socket connection before registering
+        socket.on("connect", () => {
+          console.log("🔗 User socket connected:", socket.id);
+          socketService.emit("register", {
+            userID: user.id,
+            userType: "user",
+            userName: user.phoneNumber,
+          });
         });
 
-        // Listen for connection confirmation
-        socketService.on("connection-confirmed", (data) => {
-          console.log("✅ User socket connection confirmed:", data);
+        // Listen for registration confirmation
+        socketService.on("registered", (data) => {
+          console.log("✅ User registered successfully:", data);
           setSocketConnected(true);
         });
 
@@ -408,7 +409,7 @@ export default function UserDashboard({ navigation }) {
       const response = await api.post("/call/initiate", {
         therapistId: therapist._id,
         callType,
-        zegoCallId,
+        callId: zegoCallId,
       });
 
       console.log("✅ Call initiated, response:", response.data);
@@ -429,15 +430,12 @@ export default function UserDashboard({ navigation }) {
       socketService.emit("join-room", response.data.roomId);
 
       // Send call request to therapist
-      console.log("📤 Sending call-therapist event");
-      socketService.emit("call-therapist", {
-        therapistId: therapist._id,
-        userId: user.id,
-        userName: user.name || user.phoneNumber,
-        roomId: response.data.roomId,
-        callId: response.data.callId,
-        zegoCallId: callData.zegoCallId,
+      console.log("📤 Sending initiate-call event");
+      socketService.emit("initiate-call", {
+        callerID: user.id,
+        calleeID: therapist._id,
         callType,
+        callID: response.data.callId,
       });
 
       // Set timeout for call (30 seconds)
@@ -462,69 +460,83 @@ export default function UserDashboard({ navigation }) {
   };
 
   const handleCallAccepted = (data) => {
-    console.log("✅ Call accepted:", data);
+    console.log("✅ Call accepted by therapist:", data);
+
+    // Clear timeout immediately
+    if (callTimeout) {
+      clearTimeout(callTimeout);
+      setCallTimeout(null);
+    }
+
     setCalling(false);
     setShowCallModal(false);
+
+    // Try to get call data from current call or create from available data
+    let callData = currentCall;
+    
+    if (!callData) {
+      console.warn("No current call data, reconstructing from available data");
+      // Try to reconstruct call data from what we have
+      callData = {
+        callId: data.callID,
+        therapistId: selectedTherapist?._id || '6835d5b5910b56b6d125dd74', // fallback
+        userId: user.id,
+        userName: user.name || user.phoneNumber,
+        callType: 'video', // assume video for now, could be improved
+        roomId: `room-${data.callID}`, // approximate room ID
+        zegoCallId: data.callID,
+      };
+    }
+
+    try {
+      // Merge the accepted call data with current call
+      const mergedCallData = {
+        ...callData,
+        ...data,
+        accepted: true,
+      };
+
+      console.log("✅ Navigating to call with merged data:", mergedCallData);
+
+      // Navigate to ZegoCloud call screen immediately
+      navigation.navigate("ZegoCallScreen", {
+        callData: mergedCallData,
+        userType: "user",
+        internalCallId: mergedCallData.internalCallId || mergedCallData.callId,
+      });
+
+      // Clear currentCall AFTER navigation
+      setCurrentCall(null);
+    } catch (error) {
+      console.error("❌ Error navigating to call screen:", error);
+      Alert.alert("Error", `Failed to join call: ${error.message}`);
+      setCurrentCall(null);
+    }
+  };
+
+  // Also update the handleCallTimeout method to prevent duplicate timeouts:
+  const handleCallTimeout = (data = null) => {
+    console.log("⏰ Call timeout received:", data);
+
+    // Only process if we still have an active call
+    if (!currentCall) {
+      console.log("⏰ No active call, ignoring timeout");
+      return;
+    }
 
     if (callTimeout) {
       clearTimeout(callTimeout);
       setCallTimeout(null);
     }
 
-    // Don't clear currentCall here - we need it for navigation
-    if (!currentCall) {
-      console.error("No current call data available");
-      Alert.alert("Error", "Call data not available");
-      return;
-    }
+    setCalling(false);
+    setShowCallModal(false);
+    setCurrentCall(null);
 
-    try {
-      // Merge the accepted call data with current call
-      const mergedCallData = {
-        ...currentCall,
-        ...data, // This includes any additional data from acceptance
-        accepted: true,
-      };
-
-      // Ensure we have a valid zegoCallId
-      const finalZegoCallId =
-        mergedCallData.zegoCallId ||
-        data.zegoCallId ||
-        `zego_${mergedCallData.callId}_${Date.now()}`;
-
-      console.log("Using zegoCallId for user:", finalZegoCallId);
-
-      // Validate ZegoCloud credentials
-      const appCredentials = unifiedZegoService.getAppCredentials(); // Updated method call
-      if (!appCredentials.appID || !appCredentials.appSign) {
-        throw new Error("ZegoCloud credentials not properly configured");
-      }
-
-      const userID = unifiedZegoService.generateUserID(user); // Updated method call
-      if (!userID) {
-        throw new Error("Failed to generate user ID");
-      }
-
-      // Navigate to ZegoCloud call screen
-      navigation.navigate("ZegoCallScreen", {
-        appID: appCredentials.appID,
-        appSign: appCredentials.appSign,
-        userID: userID,
-        userName: user.phoneNumber || user.name || "User",
-        callID: finalZegoCallId,
-        callType: mergedCallData.callType,
-        isInitiator: true,
-        internalCallId: mergedCallData.callId,
-        therapistName: mergedCallData.therapist.name,
-      });
-
-      // Clear currentCall AFTER successful navigation
-      setCurrentCall(null);
-    } catch (error) {
-      console.error("Error navigating to call screen:", error);
-      Alert.alert("Error", `Failed to join call: ${error.message}`);
-      setCurrentCall(null);
-    }
+    Alert.alert(
+      "Call Timeout",
+      "The therapist didn't respond in time. Please try again later."
+    );
   };
 
   const handleCallRejected = (data) => {
@@ -541,23 +553,6 @@ export default function UserDashboard({ navigation }) {
     Alert.alert(
       "Call Rejected",
       "The therapist is not available right now. Please try again later."
-    );
-  };
-
-  const handleCallTimeout = (data = null) => {
-    console.log("⏰ Call timeout", data);
-    setCalling(false);
-    setShowCallModal(false);
-    setCurrentCall(null);
-
-    if (callTimeout) {
-      clearTimeout(callTimeout);
-      setCallTimeout(null);
-    }
-
-    Alert.alert(
-      "Call Timeout",
-      "The therapist didn't respond in time. Please try again later."
     );
   };
 
@@ -592,6 +587,7 @@ export default function UserDashboard({ navigation }) {
       console.error("Error during refresh:", error);
     });
   }, []);
+
 
   const handleTabChange = (tab) => {
     setActiveTab(tab);

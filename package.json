@@ -57,18 +57,7 @@
   "overrides": {
     "@zegocloud/zego-uikit-prebuilt-call-rn": {
       "@react-navigation/native": "6.1.18",
-      "@react-navigation/native-stack": "6.4.1"
+      "@react-navigation/stack": "6.4.1"
     }
-  },
-  "resolutions": {
-    "@react-navigation/native": "6.1.18",
-    "@react-navigation/stack": "6.4.1",
-    "@react-navigation/native-stack": "6.4.1",
-    "react-native-screens": "3.31.1",
-    "@react-native-firebase/app": "20.4.0",
-    "@react-native-firebase/messaging": "20.4.0",
-    "zego-express-engine-reactnative": "3.20.2",
-    "@zegocloud/zego-uikit-prebuilt-call-rn": "6.3.11",
-    "@zegocloud/zego-uikit-rn": "2.17.9"
   }
 }

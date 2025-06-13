@@ -1,4 +1,3 @@
-// src/services/unifiedZegoService.js
 import { Alert } from "react-native";
 import {
   ZEGO_APP_ID,
@@ -13,11 +12,9 @@ class UnifiedZegoService {
   constructor() {
     this.isInitialized = false;
     this.currentCall = null;
-    this.callListeners = new Map();
-    this.eventEmitter = null;
+    this.lastCallResult = null;
   }
 
-  // Initialize service with validation
   async initialize() {
     try {
       const validation = validateZegoConfig();
@@ -36,7 +33,7 @@ class UnifiedZegoService {
     }
   }
 
-  // Generate standardized call parameters
+  // Generate call parameters for ZegoCloud
   generateCallParams(userInfo, callData = {}) {
     if (!this.isInitialized) {
       throw new Error("ZegoService not initialized");
@@ -47,32 +44,36 @@ class UnifiedZegoService {
     const userId = userInfo.id || userInfo._id;
     const userName = userInfo.name || userInfo.phoneNumber || "Unknown";
 
+    // Generate clean user ID for ZegoCloud
+    const cleanUserId = `${userType}_${userId}`.replace(/[^a-zA-Z0-9_]/g, "");
+
+    // Generate call ID if not provided
+    const callId =
+      callData.zegoCallId ||
+      callData.callId ||
+      this.generateCallId(userId, callData.targetUserId);
+
     return {
-      appID: parseInt(ZEGO_APP_ID, 10),
-      appSign: String(ZEGO_APP_SIGN),
-      userID: `${userType}_${userId}`,
+      appID: ZEGO_APP_ID,
+      appSign: ZEGO_APP_SIGN,
+      userID: cleanUserId,
       userName: String(userName),
-      callID:
-        callData.zegoCallId || callData.callId || this.generateCallId(userId),
+      callID: callId,
       callType: callData.callType || CALL_TYPES.VOICE,
       isInitiator: Boolean(callData.isInitiator),
     };
   }
 
-  // Generate unique call ID (legacy method name for compatibility)
-  generateCallID(userId, targetId = null) {
-    return this.generateCallId(userId, targetId);
-  }
-
-  // Generate unique call ID
   generateCallId(userId, targetId = null) {
     const timestamp = Date.now();
     const random = Math.random().toString(36).substring(2, 8);
     const target = targetId ? `_${targetId}` : "";
-    return `call_${userId}${target}_${timestamp}_${random}`;
+    return `call_${userId}${target}_${timestamp}_${random}`.replace(
+      /[^a-zA-Z0-9_]/g,
+      ""
+    );
   }
 
-  // Validate call parameters before use
   validateCallParams(params) {
     const required = ["appID", "appSign", "userID", "userName", "callID"];
     const missing = required.filter((key) => !params[key]);
@@ -81,18 +82,22 @@ class UnifiedZegoService {
       throw new Error(`Missing required parameters: ${missing.join(", ")}`);
     }
 
-    // Validate format
+    // Validate format for ZegoCloud compatibility
     const validFormat = /^[a-zA-Z0-9_]+$/;
-    if (!validFormat.test(params.userID) || !validFormat.test(params.callID)) {
+    if (!validFormat.test(params.userID)) {
       throw new Error(
-        "Invalid userID or callID format. Only letters, numbers, and underscores allowed."
+        "Invalid userID format. Only letters, numbers, and underscores allowed."
+      );
+    }
+    if (!validFormat.test(params.callID)) {
+      throw new Error(
+        "Invalid callID format. Only letters, numbers, and underscores allowed."
       );
     }
 
     return true;
   }
 
-  // Create optimized call configuration
   createCallConfig(callType, userType, callbacks = {}) {
     const {
       onCallEnd = () => {},
@@ -103,16 +108,16 @@ class UnifiedZegoService {
     } = callbacks;
 
     const baseConfig = {
-      // Core event handlers
+      // Event handlers
       onCallEnd: (callID, reason, duration) => {
-        console.log("📞 Call ended:", { callID, reason, duration });
+        console.log("📞 ZegoCloud call ended:", { callID, reason, duration });
         this.handleCallEnd(callID, reason, duration);
-        onCallEnd(callID, reason, duration);
+        onCallEnd(reason, duration);
       },
 
       onUserJoin: (users) => {
-        console.log("👥 User joined:", users);
-        if (!this.currentCall?.started) {
+        console.log("👥 User joined call:", users);
+        if (!this.currentCall?.started && users.length > 0) {
           this.markCallAsStarted();
           onCallStart();
         }
@@ -120,20 +125,14 @@ class UnifiedZegoService {
       },
 
       onUserLeave: (users) => {
-        console.log("👋 User left:", users);
+        console.log("👋 User left call:", users);
         onUserLeave(users);
 
-        // Auto-end call if no other users (for 1:1 calls)
-        if (users.length === 0) {
-          setTimeout(
-            () =>
-              onCallEnd(
-                this.currentCall?.callID,
-                "UserLeft",
-                this.getCallDuration()
-              ),
-            1000
-          );
+        // End call if no other users
+        if (users.length <= 1) {
+          setTimeout(() => {
+            onCallEnd("UserLeft", this.getCallDuration());
+          }, 1000);
         }
       },
 
@@ -145,63 +144,45 @@ class UnifiedZegoService {
 
       // UI Configuration
       showCallDuration: true,
-      showSwitchCameraButton: callType === CALL_TYPES.VIDEO,
       showHangUpButton: true,
       showMicrophoneButton: true,
       showSpeakerButton: true,
+      showSwitchCameraButton: callType === CALL_TYPES.VIDEO,
 
       // Audio settings
       enableSpeakerWhenJoining: callType === CALL_TYPES.VIDEO,
       turnOnMicrophoneWhenJoining: true,
 
-      // Video settings
+      // Video settings (only for video calls)
       ...(callType === CALL_TYPES.VIDEO && {
         turnOnCameraWhenJoining: true,
         useFrontFacingCamera: true,
         enableCameraWhenJoining: true,
-        videoViewMode: 1, // Aspect fit
       }),
 
-      // Quality and performance
-      enableHardwareDecoder: true,
-      enableHardwareEncoder: true,
+      // Layout and UI
+      layout: {
+        mode: "pictureInPicture",
+        isSmallViewDraggable: true,
+        switchLargeOrSmallViewByClick: true,
+      },
 
-      // Network optimization
-      enableAEC: true, // Echo cancellation
-      enableAGC: true, // Auto gain control
-      enableANS: true, // Noise suppression
+      // Call invitation (for initiators)
+      enableCallInvitation: userType === "user",
     };
 
-    // Role-specific configurations
-    if (userType === "therapist") {
-      return {
-        ...baseConfig,
-        // Therapist can control more call aspects
-        showSwitchCameraButton: callType === CALL_TYPES.VIDEO,
-        enableCallInvitation: false, // Therapists join, don't invite
-      };
-    } else {
-      return {
-        ...baseConfig,
-        // User (patient) configuration
-        enableCallInvitation: true, // Users can invite therapists
-      };
-    }
+    return baseConfig;
   }
 
-  // Start a new call session
   startCall(callData) {
     this.currentCall = {
       ...callData,
       startTime: Date.now(),
       started: false,
-      participants: [],
     };
-
     console.log("🎬 Starting call session:", this.currentCall);
   }
 
-  // Mark call as actually started (when participants join)
   markCallAsStarted() {
     if (this.currentCall && !this.currentCall.started) {
       this.currentCall.started = true;
@@ -210,19 +191,16 @@ class UnifiedZegoService {
     }
   }
 
-  // Get call duration in seconds
   getCallDuration() {
     if (!this.currentCall?.actualStartTime) return 0;
     return Math.floor((Date.now() - this.currentCall.actualStartTime) / 1000);
   }
 
-  // Handle call end cleanup
   handleCallEnd(callID, reason, duration) {
     if (this.currentCall) {
       const actualDuration = duration || this.getCallDuration();
-      console.log("🏁 Cleaning up call:", { callID, reason, actualDuration });
+      console.log("🏁 Handling call end:", { callID, reason, actualDuration });
 
-      // Store call result for potential API calls
       this.lastCallResult = {
         callID,
         reason: this.parseCallEndReason(reason),
@@ -234,7 +212,6 @@ class UnifiedZegoService {
     }
   }
 
-  // Handle call errors
   handleCallError(errorCode, message) {
     const errorMap = {
       1000001: "Network connection failed",
@@ -245,13 +222,9 @@ class UnifiedZegoService {
     };
 
     const userMessage = errorMap[errorCode] || `Call error: ${message}`;
-
-    Alert.alert("Call Error", userMessage, [
-      { text: "OK", onPress: () => this.handleCallEnd(null, "Error", 0) },
-    ]);
+    console.error("Call error:", userMessage);
   }
 
-  // Parse ZegoCloud call end reasons to our app's status
   parseCallEndReason(reason) {
     const reasonMap = {
       Declined: CALL_STATUS.REJECTED,
@@ -267,7 +240,6 @@ class UnifiedZegoService {
     return reasonMap[reason] || CALL_STATUS.CANCELLED;
   }
 
-  // Calculate call cost
   calculateCallCost(durationSeconds, callType) {
     const durationMinutes = Math.max(1, Math.ceil(durationSeconds / 60));
     const pricing = CALL_PRICING[callType] || CALL_PRICING[CALL_TYPES.VOICE];
@@ -281,17 +253,25 @@ class UnifiedZegoService {
     };
   }
 
-  // Get last call result for API reporting
   getLastCallResult() {
     return this.lastCallResult;
   }
 
-  // Check if service is ready
+  getCurrentCall() {
+    return this.currentCall;
+  }
+
   isReady() {
     return this.isInitialized && validateZegoConfig().isValid;
   }
 
-  // Legacy method for backward compatibility with existing therapist code
+  cleanup() {
+    this.currentCall = null;
+    this.lastCallResult = null;
+    console.log("🧹 ZegoService cleaned up");
+  }
+
+  // Legacy methods for backward compatibility
   async joinRoom(
     roomId,
     userId,
@@ -311,68 +291,32 @@ class UnifiedZegoService {
       await this.initialize();
     }
 
-    // Validate required parameters
-    if (!roomId || !userId || !userName) {
-      throw new Error(
-        "Missing required parameters: roomId, userId, or userName"
-      );
-    }
-
-    // Store current room info
     this.currentCall = {
       roomId,
       userId,
       userName,
       callType,
       isTherapist,
-      joinedAt: new Date().toISOString(),
       startTime: Date.now(),
       started: false,
     };
 
-    console.log("✅ Room joined successfully:", this.currentCall);
     return this.currentCall;
   }
 
-  // Get current call info
-  getCurrentCall() {
-    return this.currentCall;
-  }
-
-  // Cleanup service
-  cleanup() {
-    this.currentCall = null;
-    this.lastCallResult = null;
-    this.callListeners.clear();
-    console.log("🧹 ZegoService cleaned up");
-  }
-
-  // Get app credentials (legacy method for compatibility)
   getAppCredentials() {
     return {
-      appID: parseInt(ZEGO_APP_ID, 10),
-      appSign: String(ZEGO_APP_SIGN),
+      appID: ZEGO_APP_ID,
+      appSign: ZEGO_APP_SIGN,
     };
   }
 
-  // Generate ZegoCloud compatible user ID (legacy method for compatibility)
   generateUserID(user) {
     if (!user) return null;
-
     const userType = user.userType || (user.phoneNumber ? "user" : "therapist");
     const userId = user.id || user._id;
-
-    return `${userType}_${userId}`;
-  }
-
-  // Check network quality (if supported)
-  checkNetworkQuality() {
-    // This would integrate with ZegoCloud's network quality API
-    // Return quality indicator: 'excellent', 'good', 'fair', 'poor'
-    return "good";
+    return `${userType}_${userId}`.replace(/[^a-zA-Z0-9_]/g, "");
   }
 }
 
-// Export singleton instance
-const unifiedZegoService = new UnifiedZegoService();
-export default unifiedZegoService;
+export default new UnifiedZegoService();

@@ -127,14 +127,11 @@ export const useCallManager = (userType = "user") => {
         }));
 
         // Emit call request via socket
-        socketService.emit("call-therapist", {
-          therapistId: targetUser._id,
-          userId: currentUser.id,
-          userName: currentUser.name || currentUser.phoneNumber,
-          roomId,
-          callId: internalCallId,
-          zegoCallId,
+        socketService.emit("initiate-call", {
+          callerID: currentUser.id,
+          calleeID: targetUser._id,
           callType,
+          callID: internalCallId,
         });
 
         // Set call timeout
